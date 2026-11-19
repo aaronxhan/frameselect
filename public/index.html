@@ -1,0 +1,124 @@
+<!doctype html><html lang="en"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Frame Select</title><style id="style">*{box-sizing:border-box}body{margin:0;background:#f7f5ef;color:#252820;font:16px/1.5 system-ui,sans-serif}main{max-width:1040px;margin:auto;padding:24px 5vw 70px}header,.tools,.top{display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap}header{border-bottom:1px solid #b7baa9;padding-bottom:16px}header strong{font-size:19px;letter-spacing:-.05em}h1,h2{font-family:Georgia,serif;font-weight:400;letter-spacing:-.06em;line-height:1.02}h1{font-size:clamp(52px,8vw,98px);margin:55px 0 15px}h2{font-size:38px;margin:30px 0 12px}p{color:#515947;max-width:68ch}.panel{padding:24px 0;border-block:1px solid #bbbfae;margin:27px 0}.row{display:flex;gap:8px;flex-wrap:wrap}.row input{min-width:190px;flex:1}input,button,select{font:inherit;padding:11px 15px;border:1px solid #b9bdac;border-radius:6px;background:#fffefb;color:inherit}button{cursor:pointer}button:disabled{opacity:.45}button.primary{background:#293123;color:white;border-color:#293123}.options{margin-top:12px}label{font-weight:600;display:block;margin-bottom:6px}.note,summary,small{font-size:14px}.cards{display:grid;grid-template-columns:repeat(auto-fill,minmax(min(225px,100%),1fr));gap:14px}.card{background:#fffef9;border:1px solid #cdd0c4;padding:12px;border-radius:8px;overflow-wrap:anywhere}.card img{width:100%;height:170px;object-fit:contain;background:#181c18;border-radius:4px}.card h3{font-size:19px;margin:9px 0 3px}.card p{font-size:14px;margin:5px 0}.card a{color:#344c26}.card small{font-family:monospace}summary{cursor:pointer}progress{width:100%;accent-color:#748150}button:focus-visible,a:focus-visible{outline:3px solid #6c842d}#msg{white-space:pre-wrap}details{padding:12px 0}footer{margin-top:45px;color:#67705f;font-size:13px}</style><body><main><header><strong>▣ &nbsp;Frame Select</strong><button id="pack">Download Vercel ZIP</button></header><h1>Find the frame.</h1><p>Paste a public Google Drive folder or choose photos from your camera. Get a shortlist of original filenames, one pick per burst.</p><section class="panel"><form id="form"><label for="url">Google Drive folder</label><div class="row"><input id="url" required="" placeholder="Paste a Drive folder link"><button class="primary" id="scan">Scan folder →</button></div></form><div class="row options"><button id="pick">Choose photos</button><button id="folder">Choose local folder</button><button id="demo">Try sample shoot</button><input id="photos" type="file" multiple="" hidden=""><input id="directory" type="file" webkitdirectory="" multiple="" hidden=""></div><p class="note">Private folder? Download it from Drive, unzip it, then choose the local folder. Local RAF files are read from their embedded JPEG.</p></section><p id="msg" role="status"></p><progress id="progress" hidden=""></progress><section id="out" hidden=""><div class="top"><h2>Your selects.</h2><div class="row"><button id="copy">Copy filenames</button><button id="txt">Download TXT</button></div></div><div id="cards" class="cards"></div><details><summary id="otherTitle">Other frames</summary><div id="others"></div></details></section><footer>Selections use visible detail, exposure and burst similarity. Review faces and expressions before posting.</footer></main><script id="program">const SERVER="export default async function handler(req,res) {\n  const {id,mode,key}=req.query;\n  const valid=v=>typeof v===\"string\" && /^[\\w-]{1,180}$/.test(v);\n  if(req.method!==\"GET\" || !valid(id) || (key&&!valid(key)))return res.status(400).json({error:\"Invalid Drive link.\"});\n  const list=mode===\"list\";\n  if(!list && mode!==\"preview\")return res.status(400).end();\n  const url=new URL(list?\"https://drive.google.com/embeddedfolderview\":\"https://drive.google.com/thumbnail\");\n  url.searchParams.set(\"id\",id);\n  if(key)url.searchParams.set(\"resourcekey\",key);\n  if(!list)url.searchParams.set(\"sz\",\"w1200\");\n  try {\n    const response=await fetch(url,{signal:AbortSignal.timeout(18000)});\n    if(!response.ok)throw Error(\"Drive denied access or is temporarily unavailable.\");\n    if(!list && !/^image\\/(jpeg|png|webp)/i.test(response.headers.get(\"content-type\")||\"\"))throw Error(\"Drive has no usable preview.\");\n    const parts=[];let total=0;\n    for await(const part of response.body){total+=part.length;if(total>3500000)throw Error(\"Drive response is too large.\");parts.push(part);}\n    const bytes=Buffer.concat(parts);\n    res.setHeader(\"Cache-Control\",\"private, no-store\");\n    if(!list){res.setHeader(\"Content-Type\",response.headers.get(\"content-type\"));return res.status(200).send(bytes);}\n    const html=bytes.toString(),items=[];\n    const decode=s=>s.replace(/&(#x[\\da-f]+|#\\d+|amp|quot|apos|lt|gt);/gi,(_,x)=>x[0]===\"#\"?String.fromCodePoint(Math.min(1114111,x[1]===\"x\"?parseInt(x.slice(2),16):Number(x.slice(1)))):({amp:\"&\",quot:'\"',apos:\"'\",lt:\"<\",gt:\">\"})[x]);\n    for(const chunk of html.split(/\\bid=[\"']entry-/i).slice(1)){\n      const child=chunk.match(/^([\\w-]+)[\"']/)?.[1];\n      const title=chunk.match(/class=[\"'][^\"']*flip-entry-title[^\"']*[\"'][^>]*>([\\s\\S]*?)<\\/div>/i)?.[1];\n      if(!child||!title)continue;\n      const name=decode(title.replace(/<[^>]*>/g,\"\")).trim();\n      const href=decode(chunk.match(/<a\\b[^>]*href=[\"']([^\"']+)/i)?.[1]||\"\");\n      items.push({id:child,name,folder:/\\/folders\\/|folderview\\?/.test(href),key:href.match(/[?&]resourcekey=([\\w-]+)/)?.[1]||\"\"});\n    }\n    if(!items.length)throw Error(\"Google did not expose any entries. This folder may be private, empty, or unavailable through its public view. Use Choose photos.\");\n    return res.json({items});\n  }catch(e){return res.status(422).json({error:e.message||\"Google could not return a preview.\"});}\n}";
+const el=id=>document.getElementById(id), startMarkup=document.querySelector("main").outerHTML;
+let keep=[],busy=false;
+const photoName=n=>/\.(raf|jpe?g|png|webp|avif|heic|heif|cr2|cr3|arw|nef|dng|orf|rw2)$/i.test(n);
+function node(tag,txt){const e=document.createElement(tag);e.textContent=txt;return e}
+function download(blob,name){const a=document.createElement("a");a.href=URL.createObjectURL(blob);a.download=name;document.body.append(a);a.click();a.remove();setTimeout(()=>URL.revokeObjectURL(a.href),30000)}
+function zip(files){
+  const text=new TextEncoder(),parts=[],central=[];let off=0;
+  const u16=n=>[n&255,n>>>8&255],u32=n=>[...u16(n),...u16(n>>>16)];
+  for(const [path,content] of Object.entries(files)){
+    const name=text.encode(path),b=text.encode(content);let crc=-1;
+    for(const x of b){crc^=x;for(let i=0;i<8;i++)crc=crc>>>1^((crc&1)?0xedb88320:0)}crc=~crc;
+    const common=[...u16(20),0,0,0,0,0,0,33,0,...u32(crc),...u32(b.length),...u32(b.length),...u16(name.length),0,0];
+    const header=Uint8Array.from([80,75,3,4,...common,...name]);parts.push(header,b);
+    central.push(Uint8Array.from([80,75,1,2,20,0,...common,0,0,0,0,0,0,0,0,0,0,...u32(off),...name]));off+=header.length+b.length;
+  }
+  const n=central.length,len=central.reduce((s,b)=>s+b.length,0);
+  return new Blob([...parts,...central,Uint8Array.from([80,75,5,6,0,0,0,0,...u16(n),...u16(n),...u32(len),...u32(off),0,0])],{type:"application/zip"});
+}
+el("pack").onclick=()=>{
+  const html='<!doctype html><html lang="en"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Frame Select</title><style>'+el("style").textContent+'</style><body>'+startMarkup+'<script id="program">'+el("program").textContent+'<\/script></body></html>';
+  download(zip({"public/index.html":html.replace("<style>","<style id=\"style\">"),"api/drive.mjs":SERVER,"vercel.json":JSON.stringify({framework:null,outputDirectory:"public",functions:{"api/drive.mjs":{maxDuration:30}}}),"START.txt":"Drop this ZIP on https://vercel.com/drop and select Deploy. Open public/index.html to try the sample and local photos offline. Drive-link scanning runs on the deployed site."}),"Frame-Select-Drop.zip");
+};
+function driveRef(input){
+  const u=new URL(input.trim());if(u.hostname!=="drive.google.com")throw Error("Paste a drive.google.com folder URL.");
+  const id=u.pathname.match(/\/folders\/([\w-]+)/)?.[1]||u.searchParams.get("id");if(!id||!/^[\w-]+$/.test(id))throw Error("Could not find the folder ID.");
+  return {id,key:u.searchParams.get("resourcekey")||""};
+}
+async function api(mode,item){
+  const q=new URLSearchParams({mode,id:item.id,key:item.key||""});
+  const r=await fetch("/api/drive?"+q,{signal:AbortSignal.timeout(25000)});
+  if(!r.ok){const j=await r.json().catch(()=>({}));throw Error(j.error||"Drive is unavailable. Try Choose local folder.");}
+  if(mode==="list"&&!r.headers.get("content-type")?.includes("json"))throw Error("Deploy the ZIP on Vercel to scan a Drive link. Local photos work here.");
+  return mode==="list"?r.json():r.blob();
+}
+async function driveFiles(){
+  const root=driveRef(el("url").value),queue=[root],seen=new Set(),files=[],notes=[];
+  if(location.protocol==="file:")throw Error("Drive scanning needs the deployed site. Use Choose photos here or drop the ZIP on Vercel.");
+  while(queue.length){const f=queue.shift();if(seen.has(f.id))continue;seen.add(f.id);el("msg").textContent="Reading Drive folders… "+files.length+" photos found";
+    let result;try{result=await api("list",f)}catch(e){if(f===root)throw e;notes.push((f.name||"Subfolder")+": "+e.message);continue}
+    for(const x of result.items){if(x.folder){queue.push(x);continue}if(!seen.has(x.id)&&photoName(x.name)){seen.add(x.id);files.push({...x,parent:f.id,load:()=>api("preview",x),link:"https://drive.google.com/open?id="+encodeURIComponent(x.id)+(x.key?"&resourcekey="+encodeURIComponent(x.key):"")})}}
+  }
+  return {files,notes,source:"Public Drive view. Google can expose only part of a large folder. Import locally for a complete count."};
+}
+async function localBlob(f){
+  if(!/\.raf$/i.test(f.name))return f;
+  const h=await f.slice(0,1024).arrayBuffer(),v=new DataView(h);
+  if(h.byteLength<92||new TextDecoder().decode(h.slice(0,16))!=="FUJIFILMCCD-RAW ")throw Error("Invalid RAF header.");
+  const o=v.getUint32(84),n=v.getUint32(88);if(o<92||n<4||o+n>f.size)throw Error("Invalid RAF preview range.");
+  const b=f.slice(o,o+n,"image/jpeg");
+  const sig=async part=>new DataView(await part.arrayBuffer()).getUint16(0);
+  if(await sig(b.slice(0,2))!==0xffd8||await sig(b.slice(-2))!==0xffd9)throw Error("Incomplete RAF preview.");
+  return b;
+}
+function localFiles(list){return {files:Array.from(list).filter(f=>photoName(f.name)).map(f=>({name:f.name,parent:f.webkitRelativePath.split("/").slice(0,-1).join("/"),load:()=>localBlob(f)})),notes:[],source:"Local files · processed in this browser."}}
+function canvas(w,h){const c=document.createElement("canvas");c.width=w;c.height=h;return c}
+async function demoFiles(){
+  const files=[];
+  for(let g=0;g<3;g++)for(let i=0;i<3;i++){
+    const c=canvas(440,300),p=c.getContext("2d");p.fillStyle=["#764635","#687049","#474f71"][g];p.fillRect(0,0,440,300);
+    p.filter="blur("+[3,0,1.8][i]+"px)";p.fillStyle="#fff2cf";p.font="bold 87px Georgia";p.fillText(["Focus","Light","Shape"][g],32,144);
+    for(let k=0;k<32;k++)p.fillRect(32+k*9,174,k%3+1,55);
+    const b=await new Promise(resolve=>c.toBlob(resolve,"image/jpeg",.90));files.push({name:"DSCF"+(1000+g*10+i)+".JPG",parent:"sample",load:async()=>b});
+  }return {files,notes:[],source:"Sample focus charts · 3 simulated bursts measured by the same scanner."}
+}
+async function measure(item){
+  const b=await item.load(),url=URL.createObjectURL(b),img=new Image();
+  try{img.src=url;await img.decode();const s=Math.min(1,440/Math.max(img.width,img.height)),c=canvas(Math.max(3,Math.round(img.width*s)),Math.max(3,Math.round(img.height*s)));
+    const w=c.width,h=c.height,p=c.getContext("2d",{willReadFrequently:true});p.drawImage(img,0,0,w,h);
+    const a=p.getImageData(0,0,w,h).data,y=new Float32Array(w*h);let clipped=0;
+    for(let j=0;j<y.length;j++){y[j]=.2126*a[j*4]+.7152*a[j*4+1]+.0722*a[j*4+2];if(y[j]<6||y[j]>249)clipped++}
+    const sums=[0,0,0,0],sq=[0,0,0,0],num=[0,0,0,0];let all=0;
+    for(let j=1;j<h-1;j++)for(let k=1;k<w-1;k++){const n=j*w+k,t=+(k>=w/2)+2*(j>=h/2),d=4*y[n]-y[n-1]-y[n+1]-y[n-w]-y[n+w];sums[t]+=d;sq[t]+=d*d;num[t]++;all+=d*d}
+    const detail=.5*all/((w-2)*(h-2))+.5*Math.max(...sq.map((v,i)=>num[i]?Math.max(0,v/num[i]-(sums[i]/num[i])**2):0));
+    const d=canvas(9,8),ctx=d.getContext("2d");ctx.drawImage(c,0,0,9,8);const pix=ctx.getImageData(0,0,9,8).data;let hash="";
+    const lum=n=>pix[4*n]*.21+pix[4*n+1]*.72+pix[4*n+2]*.07;
+    for(let j=0;j<8;j++)for(let k=0;k<8;k++)hash+=Number(lum(j*9+k)>lum(j*9+k+1));
+    const thumb=canvas(220,Math.max(1,Math.round(220*h/w)));if(thumb.height>360){thumb.height=360;thumb.width=Math.max(1,Math.round(360*w/h))}
+    thumb.getContext("2d").drawImage(c,0,0,thumb.width,thumb.height);
+    return {...item,detail,clip:clipped/y.length,hash,thumb:thumb.toDataURL("image/jpeg",.73)};
+  }finally{URL.revokeObjectURL(url)}
+}
+function decide(rows){
+  const sorted=rows.map(r=>r.detail).sort((a,b)=>a-b);
+  for(const r of rows){const rank=sorted.length<2?.5:(sorted.indexOf(r.detail)+sorted.lastIndexOf(r.detail))/(2*(sorted.length-1));
+    r.score=Math.round(100*(.58*rank+.25*Math.max(0,1-r.clip*2)+.17*Math.min(1,Math.log1p(r.detail)/6)));}
+  const groups=[];let prev=null;
+  for(const r of rows.slice().sort((a,b)=>a.parent.localeCompare(b.parent)||a.name.localeCompare(b.name,undefined,{numeric:true}))){
+    const pattern=/^(.*?)(\d+)\.[^.]+$/i,a=prev?.name.match(pattern),b=r.name.match(pattern);
+    const together=prev&&prev.parent===r.parent&&a&&b&&a[1]===b[1]&&+b[2]-a[2]>=0&&+b[2]-a[2]<=1&&Array.from(r.hash).filter((c,i)=>c!==prev.hash[i]).length<=10;
+    if(!together)groups.push([]);groups.at(-1).push(r);prev=r;
+  }
+  return groups.map(g=>g.sort((a,b)=>b.score-a.score||b.detail-a.detail)).sort((a,b)=>b[0].score-a[0].score);
+}
+async function run(source){
+  if(busy)return;busy=true;for(const id of ["demo","scan","pick","folder"])el(id).disabled=true;
+  el("out").hidden=true;el("cards").replaceChildren();el("others").replaceChildren();keep=[];
+  el("msg").textContent="Opening shoot…";
+  try{const {files,notes,source:label}=await source();if(!files.length)throw Error("No supported photo filenames found.");
+    const rows=[],errors=[...notes],bar=el("progress");bar.max=files.length;bar.value=0;bar.hidden=false;
+    for(const f of files){el("msg").textContent=(bar.value+1)+" / "+files.length+" · "+f.name;try{rows.push(await measure(f))}catch(e){errors.push(f.name+" — "+(e.message||"Preview unavailable"))}bar.value++}
+    const groups=decide(rows),other=[];
+    for(const [r,...alts] of groups){
+      if(r.score>=54&&r.detail>1&&r.clip<.87){
+        keep.push(r.name);const card=node("article","");card.className="card";const pic=new Image();pic.src=r.thumb;pic.alt=r.name;card.append(pic,node("h3",r.name),node("small",r.score+" / 100"),node("p",alts.length?"Highest technical score in a "+(alts.length+1)+"-frame burst.":"Independent frame with usable detail and exposure."));
+        if(r.link){const l=node("a","Open original in Drive ↗");l.href=r.link;l.target="_blank";l.rel="noopener";card.append(l)}
+        el("cards").append(card);
+      }else other.push(r.name+" — review manually");
+      other.push(...alts.map(a=>a.name+" — alternate to "+r.name));
+    }
+    for(const name of [...other,...errors])el("others").append(node("div",name));
+    el("otherTitle").textContent="Review, alternates & unreadable ("+(other.length+errors.length)+")";
+    el("msg").textContent=keep.length+" picks from "+rows.length+" readable photos. "+label;el("out").hidden=false;
+    if(!keep.length)el("cards").append(node("p","No automatic picks. See the review list below."));
+    el("copy").disabled=el("txt").disabled=!keep.length;
+  }catch(e){el("msg").textContent=e.message+" Try sample shoot to see the results."}
+  finally{el("progress").hidden=true;busy=false;for(const id of ["demo","scan","pick","folder"])el(id).disabled=false}
+}
+el("form").onsubmit=e=>{e.preventDefault();run(driveFiles)};
+el("pick").onclick=()=>el("photos").click();el("folder").onclick=()=>el("directory").click();
+for(const id of ["photos","directory"])el(id).onchange=e=>{const files=Array.from(e.target.files);e.target.value="";if(files.length)run(()=>localFiles(files))};
+el("demo").onclick=()=>run(demoFiles);
+el("txt").onclick=()=>download(new Blob([keep.join("\n")+"\n"],{type:"text/plain"}),"keep-filenames.txt");
+el("copy").onclick=async()=>{try{await navigator.clipboard.writeText(keep.join("\n"));el("msg").textContent="Copied "+keep.length+" filenames."}catch{el("msg").textContent="Use Download TXT to save your filenames."}};</script></body></html>

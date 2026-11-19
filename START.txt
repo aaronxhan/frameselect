@@ -1,0 +1,1 @@
+Drop this ZIP on https://vercel.com/drop and select Deploy. Open public/index.html to try the sample and local photos offline. Drive-link scanning runs on the deployed site.
